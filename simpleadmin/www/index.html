@@ -157,11 +157,11 @@
             <div class="card-footer">
               <div class="row row-cols-2">
                 <div class="col">
-                  <p class="btn">刷新频率（最少 3 秒）</p>
+                  <p class="btn">刷新频率（最少 1 秒）</p>
                 </div>
                 <div class="col">
                   <div class="input-group">
-                    <input x-model="newRefreshRate" class="form-control" type="number" min="3" max="60"
+                    <input x-model="newRefreshRate" class="form-control" type="number" min="1" max="60"
                       x-bind:placeholder="refreshRate + 's'" />
                     <button @click="updateRefreshRate()" class="btn btn-outline-secondary" type="button">设置</button>
                   </div>
@@ -281,11 +281,11 @@
                 <div class="row">
                   <div class="col">
                     <div>
-                      <p>更新时间</p>
+                      <p class="btn">更新时间</p>
                     </div>
                   </div>
                   <div class="col">
-                    <p x-text="lastUpdate"></p>
+                    <p class="btn" x-text="lastUpdate"></p>
                   </div>
                 </div>
               </div>
@@ -339,7 +339,7 @@
         internetConnection: "未连接",
         lastUpdate: new Date().toLocaleString(),
         newRefreshRate: null,
-        refreshRate: 3,
+        refreshRate: 1,
         intervalId: null,
         uptime: "未知",
 
@@ -353,7 +353,7 @@
 
         parseNetworkInfo(lines) {
           lines.shift();  // 删除数组中的第一个元素
-          console.log(lines);
+          //console.log(lines);
 
           // 解析温度
           const tempLines = lines.filter(line => line.startsWith('+QTEMP:'));
@@ -419,6 +419,8 @@
             this.rx3qrsrp = qrsrpParts[3] !== '-' ? qrsrpParts[3] : 'None';
             this.qrsrpType = qrsrpParts[4] !== '-' ? qrsrpParts[4] : 'None';
           }
+
+
 
           // 解析带宽和小区 ID
           const servingCellLine = lines.find((line) => line.startsWith('+QENG: "servingcell"'));
@@ -526,42 +528,44 @@
           return percentage >= 80 ? "优秀" : percentage >= 60 ? "良好" : percentage >= 40 ? "一般" : percentage >= 0 ? "差" : "无信号";
         },
 
-        fetchCSQ() {
-          if (this.network_mode !== "NR5G-SA") {
-            this.atcmd = "AT+CSQ";
-            fetch(`/cgi-bin/get_atcommand?${new URLSearchParams({ atcmd: this.atcmd })}`)
-              .then(response => response.text())
-              .then(data => {
-                const csqLine = data.split("\n").find(line => line.startsWith("+CSQ:"));
-                this.csq = csqLine ? csqLine.split(":")[1].split(",")[0].trim() : "N/A";
-              });
-          }
-        },
-
         fetchSIMInfo() {
-          this.atcmd = "AT+QSIMSTAT?";
+          this.atcmd = "AT+QSIMSTAT?;+CSQ";
           fetch(`/cgi-bin/get_atcommand?${new URLSearchParams({ atcmd: this.atcmd })}`)
             .then(response => response.text())
             .then(data => {
-              const sim_status = data.split("\n")[1].split(":")[1].split(",")[1].trim();
-              this.sim = sim_status === "1" ? "已激活" : "未激活";
+              // 将数据按行分割成数组
+              const lines = data.split('\n').map(line => line.trim());
 
+              // 处理 SIM 状态
+              const simStatusLine = lines.find(line => line.startsWith('+QSIMSTAT:'));
+              if (simStatusLine) {
+                const simStatusParts = simStatusLine.replace('+QSIMSTAT:', '').trim().split(',').map(part => part.trim());
+                this.sim = simStatusParts[1] === "1" ? "已激活" : "未激活";
+              } else {
+                this.sim = "未激活";
+              }
+
+              // 处理 CSQ 信号强度
+              const csqLine = lines.find(line => line.startsWith('+CSQ:'));
+              if (csqLine) {
+                const csqParts = csqLine.replace('+CSQ:', '').trim().split(',').map(part => part.trim());
+                this.csq = csqParts[0] !== '-' ? csqParts[0] : 'None';
+              } else {
+                this.csq = 'None';
+              }
+
+              // 根据 SIM 状态调用相应的方法
               if (this.sim === "已激活") {
                 this.fetchNetworkInfo();
-                setTimeout(() => this.fetchCSQ(), 1000);
               } else {
                 this.resetNetworkInfo();
               }
-            });
-        },
-
-        requestPing() {
-          return fetch("/cgi-bin/get_ping")
-            .then(response => response.text())
-            .then(data => data.trim())
+            })
             .catch(error => {
-              console.error("错误:", error);
-              throw error;
+              console.error('Error fetching SIM info:', error);
+              this.sim = "未激活";
+              this.csq = 'None';
+              this.resetNetworkInfo();
             });
         },
 
@@ -588,40 +592,78 @@
             });
         },
 
+        // 方法：带超时时间的 Ping 请求
+        requestPingWithTimeout(timeout = 5000) {
+          return new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+              reject(new Error('Ping request timed out'));
+            }, timeout);
+
+            this.requestPing()
+              .then(response => {
+                clearTimeout(timeoutId);
+                resolve(response);
+              })
+              .catch(error => {
+                clearTimeout(timeoutId);
+                reject(error);
+              });
+          });
+        },
+
+        // 方法：Ping 请求
+        requestPing() {
+          return fetch("/cgi-bin/get_ping")
+            .then(response => response.text())
+            .then(text => {
+              text = text.trim(); // 修剪响应文本的空格和换行符
+              if (text === 'OK') {
+                return 'OK';
+              } else {
+                throw new Error('Ping failed');
+              }
+            });
+        },
+
+        // 更新刷新频率
         updateRefreshRate() {
-          if (this.newRefreshRate < 3) this.newRefreshRate = 3;
+          if (this.newRefreshRate < 1) this.newRefreshRate = 1;
           clearInterval(this.intervalId);
           this.refreshRate = this.newRefreshRate;
           localStorage.setItem("refreshRate", this.refreshRate);
           this.init();
         },
 
+        // 初始化方法
         init() {
           const storedRefreshRate = localStorage.getItem("refreshRate");
-          this.refreshRate = storedRefreshRate ? parseInt(storedRefreshRate) : 3;
+          this.refreshRate = storedRefreshRate ? parseInt(storedRefreshRate) : 1;
+          const pingTimeout = 5000; // 设置 Ping 请求的超时时间为 5 秒
+
           this.fetchSIMInfo();
 
-          this.requestPing().then(response => {
+          this.requestPingWithTimeout(pingTimeout).then(response => {
             this.internetConnection = response === "OK" ? "已连接" : "未连接";
           }).catch(error => {
-            console.error("错误:", error);
+            //console.error("错误:", error);
             this.internetConnection = "未连接";
           });
+
           this.fetchUpTime();
           this.lastUpdate = new Date().toLocaleString();
           console.log("已初始化");
 
           this.intervalId = setInterval(() => {
             this.fetchSIMInfo();
-            this.requestPing().then(response => {
+            this.requestPingWithTimeout(pingTimeout).then(response => {
               this.internetConnection = response === "OK" ? "已连接" : "未连接";
             }).catch(error => {
-              console.error("错误:", error);
+              //console.error("错误:", error);
               this.internetConnection = "未连接";
             });
             this.fetchUpTime();
             this.lastUpdate = new Date().toLocaleString();
-            console.log("已刷新");
+            //console.log("已刷新");
           }, this.refreshRate * 1000);
         },
       };

@@ -287,7 +287,7 @@
             const endIndex = data.indexOf("+CMGL:", startIndex) !== -1 ? data.indexOf("+CMGL:", startIndex) : data.length;
             const messageHex = data.substring(startIndex, endIndex).trim();
             const message = /^[0-9a-fA-F]+$/.test(messageHex) ? this.convertHexToText(messageHex) : messageHex;
-            if (lastIndex !== null && this.messages[lastIndex].sender === sender && (date - this.messages[lastIndex].date) / 1000 <= 1) {
+            if (lastIndex !== null && this.messages[lastIndex].sender === sender && Math.abs((date - this.messages[lastIndex].date) / 1000) <= 1) {
               this.messages[lastIndex].text += " " + message;
               this.messages[lastIndex].indices.push(index);
               this.dates[lastIndex] = this.formatDate(date);
